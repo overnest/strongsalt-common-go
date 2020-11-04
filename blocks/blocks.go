@@ -23,10 +23,19 @@ type Block interface {
 	GetData() []byte
 }
 
+//
+// A padded block list will make sure that every block is the same size by
+//    1. Padding smaller blocks into a bigger, fixed size
+//    2. Not allow blocks large than the padded size to be written
+//
+// This will allow the user to perform a binary search on the block list if
+// the block data is sorted.
+//
+
 // NewBlockListWriter creates a block list for writing only
 //
-func NewBlockListWriter(store interface{}, paddedSize uint32) (BlockList, error) {
-	return NewBlockListWriterV1(store, paddedSize)
+func NewBlockListWriter(store interface{}, paddedBlockSize uint32) (BlockList, error) {
+	return NewBlockListWriterV1(store, paddedBlockSize)
 }
 
 // NewBlockListReader creates a block list for reading only

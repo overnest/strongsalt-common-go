@@ -3,24 +3,37 @@ package blocks
 import (
 	"encoding/binary"
 	"io"
+	"math"
 	"math/rand"
 
 	"github.com/go-errors/errors"
 )
 
+//
+// A padded block list will make sure that every block is the same size by
+//    1. Padding smaller blocks into a bigger, fixed size
+//    2. Not allow blocks large than the padded size to be written
+//
+// This will allow the user to perform a binary search on the block list if
+// the block data is sorted.
+//
+
 // BlockListWriterV1 is the block list writer interface for version 1
 type BlockListWriterV1 interface {
 	GetVersion() uint32
-	IsFixedSize() bool
-	GetFixedSize() uint32
+	IsBlockPadded() bool
+	GetPaddedBlockSize() uint32
+	GetMaxDataSize() uint32
+	GetTotalBlocks() (uint32, error)
 	WriteBlock(block Block) error
+	WriteBlockData(data []byte) (Block, error)
 }
 
 // BlockListReaderV1 is the block list reader interface for version 1
 type BlockListReaderV1 interface {
 	GetVersion() uint32
-	IsFixedSize() bool
-	GetFixedSize() uint32
+	IsBlockPadded() bool
+	GetPaddedBlockSize() uint32
 	GetTotalBlocks() (uint32, error)
 	GetCurBlock() Block
 	ReadNextBlock() (Block, error)
@@ -28,16 +41,16 @@ type BlockListReaderV1 interface {
 }
 
 type blockListV1 struct {
-	version    uint32
-	fixedSize  uint32
-	curBlock   Block
-	writer     io.Writer
-	reader     io.Reader
-	readerat   io.ReaderAt
-	seeker     io.Seeker
-	initOffset uint64
-	curOffset  uint64
-	endOffset  uint64
+	version         uint32
+	paddedBlockSize uint32
+	curBlock        Block
+	writer          io.Writer
+	reader          io.Reader
+	readerat        io.ReaderAt
+	seeker          io.Seeker
+	initOffset      uint64
+	curOffset       uint64
+	endOffset       uint64
 }
 
 type blockV1 struct {
@@ -46,21 +59,56 @@ type blockV1 struct {
 	data []byte
 }
 
+const (
+	versionLen         = uint32(4)
+	padSizeLen         = uint32(4)
+	blockListHeaderLen = versionLen + padSizeLen
+
+	blockNumLen    = uint32(4)
+	blockSizeLen   = uint32(4)
+	blockHeaderLen = blockNumLen + blockSizeLen
+)
+
 // NewBlockListWriterV1 creates a block list version 1 writer
-func NewBlockListWriterV1(store interface{}, fixedSize uint32) (BlockListWriterV1, error) {
+func NewBlockListWriterV1(store interface{}, paddedBlockSize uint32) (BlockListWriterV1, error) {
 	var ok bool
-	b := &blockListV1{BlockListV1, fixedSize, nil, nil, nil, nil, nil, 0, 0, 0}
+	b := &blockListV1{BlockListV1, paddedBlockSize, nil, nil, nil, nil, nil, 0, 0, 0}
 
 	if b.writer, ok = store.(io.Writer); !ok {
 		return nil, errors.New("The storage must implement io.Writer")
 	}
 
-	if b.IsFixedSize() {
+	if b.IsBlockPadded() {
 		if _, ok = store.(io.ReaderAt); !ok {
-			return nil, errors.New(`A fixed size block list allows random access, 
+			return nil, errors.New(`A padded block list allows random access, 
 				which requires the storage to implement io.ReaderAt`)
 		}
 	}
+
+	version := make([]byte, versionLen)
+	binary.BigEndian.PutUint32(version, b.GetVersion())
+	padSize := make([]byte, padSizeLen)
+	binary.BigEndian.PutUint32(padSize, b.GetPaddedBlockSize())
+
+	n, err := b.writer.Write(version)
+	if err != nil {
+		return nil, errors.New(err)
+	}
+	if n != len(version) {
+		return nil, errors.New("Can not write version data to storage")
+	}
+
+	n, err = b.writer.Write(padSize)
+	if err != nil {
+		return nil, errors.New(err)
+	}
+	if n != len(version) {
+		return nil, errors.New("Can not write padded block size data to storage")
+	}
+
+	b.initOffset += uint64((len(version) + len(padSize)))
+	b.curOffset = b.initOffset
+	b.endOffset = b.curOffset
 
 	return b, nil
 }
@@ -74,24 +122,34 @@ func NewBlockListReaderV1(store interface{}, initOffset, endOffset uint64) (Bloc
 		return nil, errors.New("The storage must implement io.Reader")
 	}
 
-	fixedSize := make([]byte, 4)
-	n, err := b.reader.Read(fixedSize)
+	version := make([]byte, versionLen)
+	n, err := b.reader.Read(version)
 	if err != nil {
 		return nil, errors.New(err)
 	}
-	if n != len(fixedSize) {
-		return nil, errors.New("Can not read block list fixed size data from storage")
+	if n != len(version) {
+		return nil, errors.New("Can not read version data from storage")
+	}
+	b.version = binary.BigEndian.Uint32(version)
+
+	paddedBlockSize := make([]byte, padSizeLen)
+	n, err = b.reader.Read(paddedBlockSize)
+	if err != nil {
+		return nil, errors.New(err)
+	}
+	if n != len(paddedBlockSize) {
+		return nil, errors.New("Can not read padded block size data from storage")
 	}
 
-	b.fixedSize = binary.BigEndian.Uint32(fixedSize)
-	if b.IsFixedSize() {
+	b.paddedBlockSize = binary.BigEndian.Uint32(paddedBlockSize)
+	if b.IsBlockPadded() {
 		if b.readerat, ok = store.(io.ReaderAt); !ok {
-			return nil, errors.New(`A fixed size block list allows random access, 
+			return nil, errors.New(`A padded block list allows random access, 
 				which requires the storage to implement io.ReaderAt`)
 		}
 
 		if endOffset < 1 {
-			return nil, errors.New(`A fixed sized block list allows random access, 
+			return nil, errors.New(`A padded block list allows random access, 
 				which requires the code to have and endOffset > 0`)
 		}
 
@@ -101,6 +159,9 @@ func NewBlockListReaderV1(store interface{}, initOffset, endOffset uint64) (Bloc
 		}
 	}
 
+	b.initOffset += uint64((len(version) + len(paddedBlockSize)))
+	b.curOffset = b.initOffset
+
 	return b, nil
 }
 
@@ -108,12 +169,20 @@ func (b *blockListV1) GetVersion() uint32 {
 	return b.version
 }
 
-func (b *blockListV1) IsFixedSize() bool {
-	return (b.fixedSize > 0)
+func (b *blockListV1) IsBlockPadded() bool {
+	return (b.paddedBlockSize > 0)
 }
 
-func (b *blockListV1) GetFixedSize() uint32 {
-	return b.fixedSize
+func (b *blockListV1) GetPaddedBlockSize() uint32 {
+	return b.paddedBlockSize
+}
+
+func (b *blockListV1) GetMaxDataSize() uint32 {
+	if b.IsBlockPadded() {
+		return b.GetPaddedBlockSize() - 8
+	}
+
+	return math.MaxUint32
 }
 
 func (b *blockListV1) checkListValid() error {
@@ -122,12 +191,12 @@ func (b *blockListV1) checkListValid() error {
 			"bigger than the end offset(%v)", b.initOffset, b.endOffset)
 	}
 
-	if b.IsFixedSize() {
+	if b.IsBlockPadded() {
 		blockBytes := b.endOffset - b.initOffset
-		if blockBytes%uint64(b.GetFixedSize()) > 0 {
+		if blockBytes%uint64(b.GetPaddedBlockSize()) > 0 {
 			return errors.Errorf("The number of block bytes(%v) does "+
-				"not divide evenly by fixed block size(%v).", blockBytes,
-				b.GetFixedSize())
+				"not divide evenly by padded block size(%v).", blockBytes,
+				b.GetPaddedBlockSize())
 		}
 	}
 
@@ -135,8 +204,8 @@ func (b *blockListV1) checkListValid() error {
 }
 
 func (b *blockListV1) GetTotalBlocks() (uint32, error) {
-	if !b.IsFixedSize() {
-		return 0, errors.New("The block list does not have fix sized blocks. " +
+	if !b.IsBlockPadded() {
+		return 0, errors.New("The block list does not have padded fix sized blocks. " +
 			"Can not precalculate total blocks")
 	}
 
@@ -145,7 +214,7 @@ func (b *blockListV1) GetTotalBlocks() (uint32, error) {
 	}
 
 	blockBytes := b.endOffset - b.initOffset
-	return uint32(blockBytes / uint64(b.GetFixedSize())), nil
+	return uint32(blockBytes / uint64(b.GetPaddedBlockSize())), nil
 }
 
 func (b *blockListV1) GetCurBlock() Block {
@@ -161,8 +230,8 @@ func (b *blockListV1) ReadNextBlock() (Block, error) {
 	var err error
 	var blockBytes []byte
 
-	if b.IsFixedSize() {
-		blockBytes = make([]byte, b.GetFixedSize())
+	if b.IsBlockPadded() {
+		blockBytes = make([]byte, b.GetPaddedBlockSize())
 		if n, err = b.reader.Read(blockBytes); err != nil {
 			return nil, errors.New(err)
 		}
@@ -170,7 +239,7 @@ func (b *blockListV1) ReadNextBlock() (Block, error) {
 			return nil, errors.Errorf("Expecting %v bytes but read %v", len(blockBytes), n)
 		}
 	} else {
-		hdr := make([]byte, 8)
+		hdr := make([]byte, blockHeaderLen)
 		if n, err = b.reader.Read(hdr); err != nil {
 			return nil, errors.New(err)
 		}
@@ -178,7 +247,9 @@ func (b *blockListV1) ReadNextBlock() (Block, error) {
 			return nil, errors.Errorf("Expecting %v bytes but read %v", len(hdr), n)
 		}
 
-		blockSize := binary.BigEndian.Uint32(hdr[4:])
+		blockNum := binary.BigEndian.Uint32(hdr[:blockNumLen])
+		_ = blockNum // Not used
+		blockSize := binary.BigEndian.Uint32(hdr[blockNumLen:])
 		blockData := make([]byte, blockSize)
 		if n, err = b.reader.Read(blockData); err != nil {
 			return nil, errors.New(err)
@@ -191,7 +262,7 @@ func (b *blockListV1) ReadNextBlock() (Block, error) {
 		n = len(blockBytes)
 	}
 
-	blockv1, err := DeserializeBlockV1(b.GetFixedSize(), blockBytes)
+	blockv1, err := DeserializeBlockV1(b.GetPaddedBlockSize(), blockBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -210,8 +281,8 @@ func (b *blockListV1) ReadNextBlock() (Block, error) {
 }
 
 func (b *blockListV1) ReadBlockAt(index uint32) (Block, error) {
-	if !b.IsFixedSize() {
-		return nil, errors.New("The block list does not have fix sized blocks. " +
+	if !b.IsBlockPadded() {
+		return nil, errors.New("The block list does not have padded fixed sized blocks. " +
 			"Can not perform random access reads")
 	}
 
@@ -220,8 +291,8 @@ func (b *blockListV1) ReadBlockAt(index uint32) (Block, error) {
 			"of performing random access reads")
 	}
 
-	blockBytes := make([]byte, b.GetFixedSize())
-	offset := b.initOffset + (uint64(b.GetFixedSize()) * uint64(index))
+	blockBytes := make([]byte, b.GetPaddedBlockSize())
+	offset := b.initOffset + (uint64(b.GetPaddedBlockSize()) * uint64(index))
 
 	n, err := b.readerat.ReadAt(blockBytes, int64(offset))
 	if err != nil {
@@ -231,7 +302,7 @@ func (b *blockListV1) ReadBlockAt(index uint32) (Block, error) {
 		return nil, errors.Errorf("Expecting %v bytes but only read %v", len(blockBytes), n)
 	}
 
-	block, err := DeserializeBlockV1(b.GetFixedSize(), blockBytes)
+	block, err := DeserializeBlockV1(b.GetPaddedBlockSize(), blockBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +312,17 @@ func (b *blockListV1) ReadBlockAt(index uint32) (Block, error) {
 	}
 
 	return block, nil
+}
+
+func (b *blockListV1) WriteBlockData(data []byte) (Block, error) {
+	block := &blockV1{0, uint32(len(data)), data}
+
+	if b.GetCurBlock() != nil {
+		block.id = b.GetCurBlock().GetID() + 1
+	}
+
+	err := b.WriteBlock(block)
+	return block, err
 }
 
 func (b *blockListV1) WriteBlock(block Block) error {
@@ -259,7 +341,7 @@ func (b *blockListV1) WriteBlock(block Block) error {
 		blockv1.id = b.GetCurBlock().GetID() + 1
 	}
 
-	serial, err := blockv1.Serialize(b.GetFixedSize())
+	serial, err := blockv1.Serialize(b.GetPaddedBlockSize())
 	if err != nil {
 		return errors.New(err)
 	}
@@ -295,30 +377,30 @@ func (b *blockV1) GetData() []byte {
 	return b.data
 }
 
-func (b *blockV1) Serialize(fixedSize uint32) ([]byte, error) {
+func (b *blockV1) Serialize(paddedBlockSize uint32) ([]byte, error) {
 	blockSize := uint32(len(b.GetData()))
-	totalSize := 4 + 4 + blockSize
+	totalSize := blockHeaderLen + blockSize
 	arrayBytes := totalSize
 
 	// Padding turned on
-	if fixedSize > 0 {
-		arrayBytes = fixedSize
+	if paddedBlockSize > 0 {
+		arrayBytes = paddedBlockSize
 
-		// Each block can be at most "fixedSize"
-		if totalSize > fixedSize {
+		// Each block can be at most "paddedBlockSize"
+		if totalSize > paddedBlockSize {
 			return nil, NewBlockPaddingError(
 				"Block too large to pad to a fixed size",
-				fixedSize, totalSize)
+				paddedBlockSize, totalSize, paddedBlockSize-8)
 		}
 	}
 
 	serial := make([]byte, arrayBytes)
 	binary.BigEndian.PutUint32(serial[0:], b.GetID())
-	binary.BigEndian.PutUint32(serial[4:], blockSize)
-	copy(serial[8:], b.GetData())
+	binary.BigEndian.PutUint32(serial[blockNumLen:], blockSize)
+	copy(serial[blockHeaderLen:], b.GetData())
 
 	// Padding turned on
-	if fixedSize > 0 {
+	if paddedBlockSize > 0 {
 		if _, err := rand.Read(serial[totalSize:]); err != nil {
 			return nil, errors.New(err)
 		}
@@ -327,32 +409,33 @@ func (b *blockV1) Serialize(fixedSize uint32) ([]byte, error) {
 	return serial, nil
 }
 
-func (b *blockV1) deserialize(fixedSize uint32, dataBytes []byte) (*blockV1, error) {
+func (b *blockV1) deserialize(paddedBlockSize uint32, dataBytes []byte) (*blockV1, error) {
 	totalSize := uint32(len(dataBytes))
 
-	if totalSize < 8 {
+	if totalSize < blockHeaderLen {
 		return nil, errors.Errorf("Insufficient data size of %v", totalSize)
 	}
 
 	// Padding turned on
-	if fixedSize > 0 && totalSize != fixedSize {
-		return nil, errors.Errorf("Data size(%v) does not match fixed block size(%v)",
-			totalSize, fixedSize)
+	if paddedBlockSize > 0 && totalSize != paddedBlockSize {
+		return nil, errors.Errorf("Data size(%v) does not match padded block size(%v)",
+			totalSize, paddedBlockSize)
 	}
 
 	b.id = binary.BigEndian.Uint32(dataBytes[0:])
-	b.size = binary.BigEndian.Uint32(dataBytes[4:])
+	b.size = binary.BigEndian.Uint32(dataBytes[blockNumLen:])
 
-	if b.size+8 > totalSize {
+	if b.size+blockHeaderLen > totalSize {
 		return nil, errors.Errorf("Block size(%v) is bigger than the data size(%v)",
 			b.size+8, totalSize)
 	}
 
-	b.data = dataBytes[8 : 8+b.size]
+	b.data = dataBytes[blockHeaderLen : blockHeaderLen+b.size]
 	return b, nil
 }
 
-func DeserializeBlockV1(fixedSize uint32, dataBytes []byte) (*blockV1, error) {
+// DeserializeBlockV1 deserializes V1 block
+func DeserializeBlockV1(paddedBlockSize uint32, dataBytes []byte) (Block, error) {
 	block := &blockV1{}
-	return block.deserialize(fixedSize, dataBytes)
+	return block.deserialize(paddedBlockSize, dataBytes)
 }

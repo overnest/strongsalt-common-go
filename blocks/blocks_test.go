@@ -1,11 +1,13 @@
 package blocks
 
 import (
+	"bytes"
 	"math/rand"
 	"os"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/overnest/strongsalt-common-go/tools"
 	"gotest.tools/assert"
 )
 
@@ -25,7 +27,7 @@ func TestBlockV1(t *testing.T) {
 
 	block := newBlock(1, dataSize, data[:dataSize])
 
-	fixesSizes := []uint32{
+	paddedSizes := []uint32{
 		dataSize + hdrSize,
 		dataSize + hdrSize + 10,
 		dataSize + hdrSize + 100,
@@ -33,25 +35,25 @@ func TestBlockV1(t *testing.T) {
 		0,
 	}
 
-	for _, fixedSize := range fixesSizes {
-		serial, err := block.Serialize(fixedSize)
+	for _, paddedBlockSize := range paddedSizes {
+		serial, err := block.Serialize(paddedBlockSize)
 
-		if fixedSize > 0 { // Fix sized blocks are turned on
-			if fixedSize < dataSize+hdrSize {
+		if paddedBlockSize > 0 { // Fix sized blocks are turned on
+			if paddedBlockSize < dataSize+hdrSize {
 				assert.ErrorType(t, err, &BlockPaddingError{})
 				if paderr, ok := err.(*BlockPaddingError); !ok {
 					// Should never get here
 					assert.Assert(t, ok)
 				} else {
 					assert.Equal(t, paderr.BlockSize, dataSize+hdrSize)
-					assert.Equal(t, paderr.FixedSize, fixedSize)
+					assert.Equal(t, paderr.PaddedBlockSize, paddedBlockSize)
 				}
 			} else {
 				assert.NilError(t, err)
-				assert.Equal(t, uint32(len(serial)), fixedSize)
+				assert.Equal(t, uint32(len(serial)), paddedBlockSize)
 				assert.DeepEqual(t, block.GetData(), serial[hdrSize:hdrSize+dataSize])
 
-				deserialBlock, err := DeserializeBlockV1(fixedSize, serial)
+				deserialBlock, err := DeserializeBlockV1(paddedBlockSize, serial)
 				assert.NilError(t, err)
 				assert.DeepEqual(t, block, deserialBlock, cmp.AllowUnexported(blockV1{}))
 			}
@@ -60,41 +62,156 @@ func TestBlockV1(t *testing.T) {
 			assert.Equal(t, uint32(len(serial)), dataSize+hdrSize)
 			assert.DeepEqual(t, block.GetData(), serial[hdrSize:])
 
-			deserialBlock, err := DeserializeBlockV1(fixedSize, serial)
+			deserialBlock, err := DeserializeBlockV1(paddedBlockSize, serial)
 			assert.NilError(t, err)
 			assert.DeepEqual(t, block, deserialBlock, cmp.AllowUnexported(blockV1{}))
 		}
-	} // for _, fixedSize := range fixesSizes
+	} // for _, paddedBlockSize := range paddedSizes
 }
 
 func TestBlockListV1(t *testing.T) {
+	// Test variable sized block list
+	testBlockListV1(t, 0, 10, 50)
+	// Test padded fixed sized block list
+	testBlockListV1(t, 15, 10, 50)
+}
+
+func testBlockListV1(t *testing.T, paddedBlockSize, targetBlockSize, variancePercentage uint32) {
 	fileName := "/tmp/blocklistv1_test"
 
+	//
+	// Create block list
+	//
 	file, err := os.Create(fileName)
 	assert.NilError(t, err)
 	defer os.Remove(fileName)
 	defer file.Close()
 
-	// Test variable sized block list first
-	fixedSize := uint32(0)
-	targetBlocks := 10
-	targetBlockSize := len(teststr) / targetBlocks
-	variancePercentage := 50
-	varianceByteRange := (targetBlockSize * variancePercentage / 100)
-
-	// blWriter, err := NewBlockListWriterV1(file, fixedSize)
-	// assert.NilError(t, err)
-	// assert.Equal(t, blWriter.GetVersion(), BlockListV1)
-
-	varianceBytes := rand.Intn(varianceByteRange)
-	_ = varianceBytes
-
-	bl, err := NewBlockListWriter(file, fixedSize)
+	blWriter, err := NewBlockListWriterV1(file, paddedBlockSize)
 	assert.NilError(t, err)
-	assert.Equal(t, bl.GetVersion(), BlockListV1)
-	blwriter, ok := bl.(BlockListWriterV1)
-	assert.Assert(t, ok)
+	assert.Equal(t, blWriter.GetVersion(), BlockListV1)
 
-	assert.Equal(t, blwriter.GetFixedSize(), 0)
+	// bl, err := NewBlockListWriter(file, fixedBlockSize)
+	// assert.NilError(t, err)
+	// assert.Equal(t, bl.GetVersion(), BlockListV1)
+	// blWriter, ok := bl.(BlockListWriterV1)
+	// assert.Assert(t, ok)
 
+	assert.Equal(t, blWriter.GetPaddedBlockSize(), paddedBlockSize)
+	totalBlocks, err := blWriter.GetTotalBlocks()
+
+	if paddedBlockSize > 0 {
+		assert.Assert(t, blWriter.IsBlockPadded())
+		assert.NilError(t, err)
+		assert.Equal(t, totalBlocks, uint32(0))
+	} else {
+		assert.Assert(t, !blWriter.IsBlockPadded())
+		assert.Assert(t, err != nil)
+	}
+
+	varianceByteRange := int((targetBlockSize * variancePercentage / 100))
+	buffer := bytes.NewBufferString(teststr)
+	var n int = 0
+	err = nil
+	writtenBlocks := uint32(0)
+
+	for err == nil {
+		var block Block
+		blockData := getVariableSizedBlocks(varianceByteRange, targetBlockSize)
+		n, err = buffer.Read(blockData)
+		if err == nil {
+			blockData = blockData[:n]
+			blockDataLen := uint32(len(blockData))
+
+			block, err = blWriter.WriteBlockData(blockData)
+			if blWriter.IsBlockPadded() {
+				if blockDataLen > blWriter.GetPaddedBlockSize()-8 {
+					// Too big to be padded
+					_, ok := IsBlockPaddingError(err)
+					assert.Assert(t, ok)
+
+					for blockDataLen > 0 {
+						maxDataSize := tools.MinUint32(blWriter.GetMaxDataSize(), uint32(len(blockData)))
+						block, err = blWriter.WriteBlockData(blockData[:maxDataSize])
+						assert.NilError(t, err)
+						assert.Equal(t, block.GetSize(), uint32(len(blockData[:maxDataSize])))
+						assert.DeepEqual(t, block.GetData(), blockData[:maxDataSize])
+						blockData = blockData[maxDataSize:]
+						blockDataLen = uint32(len(blockData))
+						writtenBlocks++
+					}
+				} else {
+					assert.Equal(t, block.GetSize(), blockDataLen)
+					assert.DeepEqual(t, block.GetData(), blockData)
+					writtenBlocks++
+				}
+			} else {
+				assert.NilError(t, err)
+				assert.Equal(t, block.GetSize(), uint32(len(blockData)))
+				assert.DeepEqual(t, block.GetData(), blockData)
+				writtenBlocks++
+			}
+		}
+	}
+
+	file.Close()
+
+	//
+	// Read block list serially
+	//
+	file, err = os.Open(fileName)
+	assert.NilError(t, err)
+	defer file.Close()
+	stat, err := file.Stat()
+	assert.NilError(t, err)
+	blReader, err := NewBlockListReaderV1(file, 0, uint64(stat.Size()))
+	assert.NilError(t, err)
+	readBlocks := uint32(0)
+
+	var readBytes []byte = nil
+	err = nil
+	for err == nil {
+		var block Block
+		block, err = blReader.ReadNextBlock()
+		if err == nil {
+			assert.Equal(t, block.GetSize(), uint32(len(block.GetData())))
+			assert.DeepEqual(t, block.GetData(), blReader.GetCurBlock().GetData())
+			readBytes = append(readBytes, block.GetData()...)
+			readBlocks++
+		}
+	}
+
+	assert.Equal(t, readBlocks, writtenBlocks)
+	assert.Equal(t, teststr, string(readBytes))
+
+	//
+	// Read block list randomly
+	//
+	readBytes = nil
+	readBlocks = 0
+	if blReader.IsBlockPadded() {
+		totalBlocks, err := blReader.GetTotalBlocks()
+		assert.NilError(t, err)
+		for i := int(totalBlocks) - 1; i >= 0; i-- {
+			block, err := blReader.ReadBlockAt(uint32(i))
+			assert.NilError(t, err)
+			readBytes = append(block.GetData(), readBytes...)
+			readBlocks++
+		}
+
+		assert.Equal(t, readBlocks, writtenBlocks)
+		assert.Equal(t, teststr, string(readBytes))
+	}
+}
+
+func getVariableSizedBlocks(varianceByteRange int, targetBlockSize uint32) []byte {
+	varianceBytes := uint32(rand.Intn(varianceByteRange))
+	blockSize := targetBlockSize
+	if int(varianceBytes) < varianceByteRange/2 {
+		blockSize -= varianceBytes
+	} else {
+		blockSize += varianceBytes
+	}
+
+	return make([]byte, blockSize)
 }
