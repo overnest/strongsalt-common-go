@@ -2,7 +2,6 @@ package headers
 
 import (
 	"encoding/binary"
-	"fmt"
 
 	"github.com/go-errors/errors"
 	"github.com/overnest/strongsalt-common-go/tools"
@@ -16,6 +15,17 @@ const (
 	// PlainHeaderCurV is the current version of plaintext header
 	PlainHeaderCurV = PlainHeaderV1
 )
+
+// The plaintext header V1 has the following format:
+// --------------------------------------------------------
+// | version(4) | hdrtype(4) | hdrlen(4) | header(hdrlen) |
+// --------------------------------------------------------
+// 1. version(4 bytes): This tells us which header version to use when
+// 	  parsing.
+// 2. hdrtype(4 bytes): Format of the header that follows
+// 3. hdrlen(4 bytes): This tells us how many bytes the serialized headers
+//    are.
+// 4. header(hdrlen bytes): The serialized header information
 
 // PlainHdrV1 is the V1 plaintext header
 type PlainHdrV1 struct {
@@ -48,40 +58,67 @@ func (h *PlainHdrV1) Serialize() ([]byte, error) {
 	return b, nil
 }
 
-func (h *PlainHdrV1) deserialize(b []byte) error {
+// Our headers have variable lengths. Therefore, when deserializing, we
+// will not know ahead of time how many bytes to pass to the deserialization
+// function. The only way to know whether we have enough bytes for deserialization
+// is to attempt deserialization. So we will have the following return values
+// for all deserialization functions:
+// 1. complete: whether the passed in byte array is enough to deserialize the
+// 			 entire header. If complete = false, then the user needs to
+// 			 retry the function with more bytes.
+// 2. parsedBytes: if complete = true, then this field tells the caller how
+// 			 many bytes of the input array was actually used. The rest
+// 			 of the array would be part of the data that follows this
+// 			 header.
+// 3. err: unrecoverable error occurred during the deserialization process.
+//      No need to reattempt. Not having enough bytes in the input array will
+// 		NEVER generate an error.
+
+func (h *PlainHdrV1) deserialize(b []byte) (complete bool, parsedBytes uint32, err error) {
+	complete = false
+	parsedBytes = 0
+	err = nil
+
 	if len(b) < 12 {
-		return errors.New(fmt.Sprintf(
-			"Parsing error. Insufficient input byte count of %v", len(b)))
+		return
 	}
 
 	h.Version = binary.BigEndian.Uint32(b[0:])
 	h.HdrType = HeaderType(binary.BigEndian.Uint32(b[4:]))
 	h.HdrLen = binary.BigEndian.Uint32(b[8:])
+	parsedBytes += 12
 
-	if uint32(len(b)) < 12+h.HdrLen {
-		return errors.New(fmt.Sprintf(
-			"Parsing error. Expecting %v bytes but only received %v",
-			12+h.HdrLen, len(b)))
+	if uint32(len(b)) < parsedBytes+h.HdrLen {
+		return
 	}
 
-	h.HdrBody = b[12 : 12+h.HdrLen]
+	h.HdrBody = b[parsedBytes : parsedBytes+h.HdrLen]
+	parsedBytes += h.HdrLen
+
 	if h.HdrType.IsGzipped() {
-		body, err := tools.Gunzip(h.HdrBody)
-		if err != nil {
-			return errors.New(err)
+		body, gerr := tools.Gunzip(h.HdrBody)
+		if gerr != nil {
+			err = errors.New(gerr)
+			return
 		}
 		h.HdrLen = uint32(len(body))
 		h.HdrBody = body
 	}
 
-	return nil
+	complete = true
+	return
 }
 
 // DeserializePlainHdrV1 deserializes the plaintext header
-func DeserializePlainHdrV1(b []byte) (*PlainHdrV1, error) {
-	h := &PlainHdrV1{}
-	if err := h.deserialize(b); err != nil {
-		return nil, err
+func DeserializePlainHdrV1(b []byte) (complete bool, parsedBytes uint32, header *PlainHdrV1, err error) {
+	complete = false
+	parsedBytes = 0
+	header = nil
+	err = nil
+
+	header = &PlainHdrV1{}
+	if complete, parsedBytes, err = header.deserialize(b); err != nil {
+		return
 	}
-	return h, nil
+	return
 }

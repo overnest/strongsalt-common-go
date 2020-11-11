@@ -2,10 +2,15 @@ package headers
 
 import (
 	"encoding/binary"
-	"fmt"
+	"unsafe"
 
 	"github.com/go-errors/errors"
 )
+
+//
+// All headers will begin with a 4 byte version number. This version
+// number will tell us how to parse the following bytes.
+//
 
 // Header is an interface for all header structures with a version number
 type Header interface {
@@ -65,34 +70,65 @@ func CreateCipherHdr(hdrType HeaderType, hdrBody []byte) Header {
 	return hdr
 }
 
-// DeserializePlainHdr is the deserialization function for plaintext header
-func DeserializePlainHdr(b []byte) (Header, error) {
+// Our headers have variable lengths. Therefore, when deserializing, we
+// will not know ahead of time how many bytes to pass to the deserialization
+// function. The only way to know whether we have enough bytes for deserialization
+// is to attempt deserialization. So we will have the following return values
+// for all deserialization functions:
+// 1. complete: whether the passed in byte array is enough to deserialize the
+// 			 entire header. If complete = false, then the user needs to
+// 			 retry the function with more bytes.
+// 2. parsedBytes: if complete = true, then this field tells the caller how
+// 			 many bytes of the input array was actually used. The rest
+// 			 of the array would be part of the data that follows this
+// 			 header.
+// 3. header: if complete = true, this would be the deserialized header object
+// 4. err: unrecoverable error occurred during the deserialization process.
+//      No need to reattempt. Not having enough bytes in the input array will
+// 		NEVER generate an error.
+
+// DeserialPlainHdr is the deserialization function for plaintext header
+func DeserialPlainHdr(b []byte) (complete bool, parsedBytes uint32, header Header, err error) {
+	complete = false
+	parsedBytes = 0
+	header = nil
+	err = nil
+
 	if len(b) < 4 {
-		return nil, errors.New(fmt.Sprintf(
-			"Parsing error. Insufficient input byte count of %v", len(b)))
+		return
 	}
 
 	version := binary.BigEndian.Uint32(b[0:])
+	parsedBytes += uint32(unsafe.Sizeof(version))
+
 	switch version {
 	case PlainHeaderV1:
 		return DeserializePlainHdrV1(b)
 	}
 
-	return nil, errors.New(fmt.Sprintf("Version %v is not supported", version))
+	err = errors.Errorf("Version %v is not supported", version)
+	return
 }
 
-// DeserializeCipherHdr is the deserialization function for ciphertext header
-func DeserializeCipherHdr(b []byte) (Header, error) {
+// DeserialCipherHdr is the deserialization function for ciphertext header
+func DeserialCipherHdr(b []byte) (complete bool, parsedBytes uint32, header Header, err error) {
+	complete = false
+	parsedBytes = 0
+	header = nil
+	err = nil
+
 	if len(b) < 4 {
-		return nil, errors.New(fmt.Sprintf(
-			"Parsing error. Insufficient input byte count of %v", len(b)))
+		return
 	}
 
 	version := binary.BigEndian.Uint32(b[0:])
+	parsedBytes += uint32(unsafe.Sizeof(version))
+
 	switch version {
 	case CipherHeaderV1:
 		return DeserializeCipherHdrV1(b)
 	}
 
-	return nil, errors.New(fmt.Sprintf("Version %v is not supported", version))
+	err = errors.Errorf("Version %v is not supported", version)
+	return
 }

@@ -28,8 +28,10 @@ func TestPlaintextHeaderV1(t *testing.T) {
 		s, err := header.Serialize()
 		assert.NilError(t, err)
 
-		d, err := DeserializePlainHdrV1(s)
+		complete, parsedBytes, d, err := DeserializePlainHdrV1(s)
 		assert.NilError(t, err)
+		assert.Equal(t, complete, true)
+		assert.Equal(t, parsedBytes, uint32(len(s)))
 		assert.DeepEqual(t, d, plainHdr)
 	}
 }
@@ -47,8 +49,10 @@ func TestCiphertextHeaderV1(t *testing.T) {
 		s, err := header.Serialize()
 		assert.NilError(t, err)
 
-		d, err := DeserializeCipherHdrV1(s)
+		complete, parsedBytes, d, err := DeserializeCipherHdrV1(s)
 		assert.NilError(t, err)
+		assert.Equal(t, complete, true)
+		assert.Equal(t, parsedBytes, uint32(len(s)))
 		assert.DeepEqual(t, d, cipherHdr)
 	}
 }
