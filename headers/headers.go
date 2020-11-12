@@ -87,8 +87,8 @@ func CreateCipherHdr(hdrType HeaderType, hdrBody []byte) Header {
 //      No need to reattempt. Not having enough bytes in the input array will
 // 		NEVER generate an error.
 
-// DeserialPlainHdr is the deserialization function for plaintext header
-func DeserialPlainHdr(b []byte) (complete bool, parsedBytes uint32, header Header, err error) {
+// DeserializePlainHdr is the deserialization function for plaintext header
+func DeserializePlainHdr(b []byte) (complete bool, parsedBytes uint32, header Header, err error) {
 	complete = false
 	parsedBytes = 0
 	header = nil
@@ -110,8 +110,8 @@ func DeserialPlainHdr(b []byte) (complete bool, parsedBytes uint32, header Heade
 	return
 }
 
-// DeserialCipherHdr is the deserialization function for ciphertext header
-func DeserialCipherHdr(b []byte) (complete bool, parsedBytes uint32, header Header, err error) {
+// DeserializeCipherHdr is the deserialization function for ciphertext header
+func DeserializeCipherHdr(b []byte) (complete bool, parsedBytes uint32, header Header, err error) {
 	complete = false
 	parsedBytes = 0
 	header = nil
