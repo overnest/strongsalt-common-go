@@ -2,18 +2,10 @@ package headers
 
 import (
 	"encoding/binary"
+	"io"
 
 	"github.com/go-errors/errors"
 	"github.com/overnest/strongsalt-common-go/tools"
-)
-
-const (
-	_ = iota // Skip 0
-	// PlainHeaderV1 is plaintext header version 1
-	PlainHeaderV1 = uint32(iota)
-
-	// PlainHeaderCurV is the current version of plaintext header
-	PlainHeaderCurV = PlainHeaderV1
 )
 
 // The plaintext header V1 has the following format:
@@ -121,4 +113,42 @@ func DeserializePlainHdrV1(b []byte) (complete bool, parsedBytes uint32, header 
 		return
 	}
 	return
+}
+
+// DeserializePlainHdrStreamV1 deserializes the plaintext header
+func DeserializePlainHdrStreamV1(reader io.Reader) (header *PlainHdrV1, err error) {
+	var hdrType uint32
+	if err = binary.Read(reader, binary.BigEndian, &hdrType); err != nil {
+		return nil, errors.WrapPrefix(err, "Can not read header type", 0)
+	}
+
+	var hdrLen uint32
+	if err = binary.Read(reader, binary.BigEndian, &hdrLen); err != nil {
+		return nil, errors.WrapPrefix(err, "Can not read header length", 0)
+	}
+
+	header = &PlainHdrV1{
+		Version: PlainHeaderV1,
+		HdrType: HeaderType(hdrType),
+		HdrLen:  hdrLen}
+	header.HdrBody = make([]byte, header.HdrLen)
+	n, rerr := reader.Read(header.HdrBody)
+	if rerr != nil && rerr != io.EOF {
+		return nil, errors.WrapPrefix(rerr, "Can not read header body", 0)
+	}
+	if uint32(n) != header.HdrLen {
+		return nil, errors.Errorf("Read %v bytes for header body but expected %v", n, header.HdrLen)
+	}
+
+	if header.HdrType.IsGzipped() {
+		body, gerr := tools.Gunzip(header.HdrBody)
+		if gerr != nil {
+			err = errors.New(gerr)
+			return
+		}
+		header.HdrLen = uint32(len(body))
+		header.HdrBody = body
+	}
+
+	return header, nil
 }

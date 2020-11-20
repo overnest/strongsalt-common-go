@@ -2,6 +2,7 @@ package headers
 
 import (
 	"encoding/binary"
+	"io"
 	"unsafe"
 
 	"github.com/go-errors/errors"
@@ -42,6 +43,24 @@ const (
 	HeaderTypeBSON = HeaderType(iota)
 	// HeaderTypeBSONGzip means header body type is Gzipped BSON
 	HeaderTypeBSONGzip = HeaderType(iota)
+)
+
+const (
+	_ = iota // Skip 0
+	// PlainHeaderV1 is plaintext header version 1
+	PlainHeaderV1 = uint32(iota)
+
+	// PlainHeaderCurV is the current version of plaintext header
+	PlainHeaderCurV = PlainHeaderV1
+)
+
+const (
+	_ = iota // Skip 0
+	// CipherHeaderV1 is ciphertext header version 1
+	CipherHeaderV1 = uint32(iota)
+
+	// CipherHeaderCurV is the current version of ciphertext header
+	CipherHeaderCurV = CipherHeaderV1
 )
 
 // IsGzipped shows whether header is Gzipped
@@ -110,6 +129,22 @@ func DeserializePlainHdr(b []byte) (complete bool, parsedBytes uint32, header He
 	return
 }
 
+// DeserializePlainHdrStream is the deserialization function for plaintext header
+func DeserializePlainHdrStream(reader io.Reader) (header Header, err error) {
+	var version uint32
+	if err = binary.Read(reader, binary.BigEndian, &version); err != nil {
+		return nil, errors.WrapPrefix(err, "Can not read version number", 1)
+	}
+
+	switch version {
+	case PlainHeaderV1:
+		return DeserializePlainHdrStreamV1(reader)
+	}
+
+	err = errors.Errorf("Version %v is not supported", version)
+	return
+}
+
 // DeserializeCipherHdr is the deserialization function for ciphertext header
 func DeserializeCipherHdr(b []byte) (complete bool, parsedBytes uint32, header Header, err error) {
 	complete = false
@@ -127,6 +162,22 @@ func DeserializeCipherHdr(b []byte) (complete bool, parsedBytes uint32, header H
 	switch version {
 	case CipherHeaderV1:
 		return DeserializeCipherHdrV1(b)
+	}
+
+	err = errors.Errorf("Version %v is not supported", version)
+	return
+}
+
+// DeserializeCipherHdrStream is the deserialization function for plaintext header
+func DeserializeCipherHdrStream(reader io.Reader) (header Header, err error) {
+	var version uint32
+	if err = binary.Read(reader, binary.BigEndian, &version); err != nil {
+		return nil, errors.WrapPrefix(err, "Can not read version number", 1)
+	}
+
+	switch version {
+	case CipherHeaderV1:
+		return DeserializeCipherHdrStreamV1(reader)
 	}
 
 	err = errors.Errorf("Version %v is not supported", version)

@@ -2,6 +2,7 @@ package headers
 
 import (
 	"encoding/binary"
+	"io"
 
 	"github.com/go-errors/errors"
 	"github.com/overnest/strongsalt-common-go/tools"
@@ -10,15 +11,6 @@ import (
 const (
 	// CipherHdrV1Prime is a prime number used to detect decryption error
 	CipherHdrV1Prime = 1879785779
-)
-
-const (
-	_ = iota // Skip 0
-	// CipherHeaderV1 is ciphertext header version 1
-	CipherHeaderV1 = uint32(iota)
-
-	// CipherHeaderCurV is the current version of ciphertext header
-	CipherHeaderCurV = CipherHeaderV1
 )
 
 // The ciphertext header V1 has the following format:
@@ -141,4 +133,49 @@ func DeserializeCipherHdrV1(b []byte) (complete bool, parsedBytes uint32, header
 		return
 	}
 	return
+}
+
+// DeserializeCipherHdrStreamV1 deserializes the ciphertext header
+func DeserializeCipherHdrStreamV1(reader io.Reader) (header *CipherHdrV1, err error) {
+	header = &CipherHdrV1{Version: CipherHeaderV1}
+
+	if err = binary.Read(reader, binary.BigEndian, &header.Prime); err != nil {
+		return nil, errors.WrapPrefix(err, "Can not read header prime number", 1)
+	}
+
+	if header.Prime != CipherHdrV1Prime {
+		err = errors.Errorf("Parsing error. Prime number does not match. Possible corruption")
+		return
+	}
+
+	var hdrType uint32
+	if err = binary.Read(reader, binary.BigEndian, &hdrType); err != nil {
+		return nil, errors.WrapPrefix(err, "Can not read header type", 1)
+	}
+
+	if err = binary.Read(reader, binary.BigEndian, &header.HdrLen); err != nil {
+		return nil, errors.WrapPrefix(err, "Can not read header length", 1)
+	}
+
+	header.HdrType = HeaderType(hdrType)
+	header.HdrBody = make([]byte, header.HdrLen)
+	n, rerr := reader.Read(header.HdrBody)
+	if rerr != nil && rerr != io.EOF {
+		return nil, errors.WrapPrefix(rerr, "Can not read header body", 1)
+	}
+	if uint32(n) != header.HdrLen {
+		return nil, errors.Errorf("Read %v bytes for header body but expected %v", n, header.HdrLen)
+	}
+
+	if header.HdrType.IsGzipped() {
+		body, gerr := tools.Gunzip(header.HdrBody)
+		if gerr != nil {
+			err = errors.New(gerr)
+			return
+		}
+		header.HdrLen = uint32(len(body))
+		header.HdrBody = body
+	}
+
+	return header, nil
 }
