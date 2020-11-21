@@ -130,19 +130,26 @@ func DeserializePlainHdr(b []byte) (complete bool, parsedBytes uint32, header He
 }
 
 // DeserializePlainHdrStream is the deserialization function for plaintext header
-func DeserializePlainHdrStream(reader io.Reader) (header Header, err error) {
+func DeserializePlainHdrStream(reader io.Reader) (header Header, parsed uint32, err error) {
+	header = nil
+	parsed = 0
+	err = nil
+
 	var version uint32
 	if err = binary.Read(reader, binary.BigEndian, &version); err != nil {
-		return nil, errors.WrapPrefix(err, "Can not read version number", 1)
+		err = errors.WrapPrefix(err, "Can not read version number", 1)
+		return
 	}
 
 	switch version {
 	case PlainHeaderV1:
-		return DeserializePlainHdrStreamV1(reader)
+		header, parsed, err = DeserializePlainHdrStreamV1(reader)
+		parsed += 4
+		return
+	default:
+		err = errors.Errorf("Version %v is not supported", version)
+		return
 	}
-
-	err = errors.Errorf("Version %v is not supported", version)
-	return
 }
 
 // DeserializeCipherHdr is the deserialization function for ciphertext header
@@ -168,18 +175,25 @@ func DeserializeCipherHdr(b []byte) (complete bool, parsedBytes uint32, header H
 	return
 }
 
-// DeserializeCipherHdrStream is the deserialization function for plaintext header
-func DeserializeCipherHdrStream(reader io.Reader) (header Header, err error) {
+// DeserializeCipherHdrStream is the deserialization function for ciphertext header
+func DeserializeCipherHdrStream(reader io.Reader) (header Header, parsed uint32, err error) {
+	header = nil
+	parsed = 0
+	err = nil
+
 	var version uint32
 	if err = binary.Read(reader, binary.BigEndian, &version); err != nil {
-		return nil, errors.WrapPrefix(err, "Can not read version number", 1)
+		err = errors.WrapPrefix(err, "Can not read version number", 1)
+		return
 	}
 
 	switch version {
 	case CipherHeaderV1:
-		return DeserializeCipherHdrStreamV1(reader)
+		header, parsed, err = DeserializeCipherHdrStreamV1(reader)
+		parsed += 4
+		return
+	default:
+		err = errors.Errorf("Version %v is not supported", version)
+		return
 	}
-
-	err = errors.Errorf("Version %v is not supported", version)
-	return
 }

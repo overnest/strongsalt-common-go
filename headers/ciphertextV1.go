@@ -136,12 +136,16 @@ func DeserializeCipherHdrV1(b []byte) (complete bool, parsedBytes uint32, header
 }
 
 // DeserializeCipherHdrStreamV1 deserializes the ciphertext header
-func DeserializeCipherHdrStreamV1(reader io.Reader) (header *CipherHdrV1, err error) {
+func DeserializeCipherHdrStreamV1(reader io.Reader) (header *CipherHdrV1, parsed uint32, err error) {
 	header = &CipherHdrV1{Version: CipherHeaderV1}
+	parsed = 0
+	err = nil
 
 	if err = binary.Read(reader, binary.BigEndian, &header.Prime); err != nil {
-		return nil, errors.WrapPrefix(err, "Can not read header prime number", 1)
+		err = errors.WrapPrefix(err, "Can not read header prime number", 1)
+		return
 	}
+	parsed += 4
 
 	if header.Prime != CipherHdrV1Prime {
 		err = errors.Errorf("Parsing error. Prime number does not match. Possible corruption")
@@ -150,22 +154,29 @@ func DeserializeCipherHdrStreamV1(reader io.Reader) (header *CipherHdrV1, err er
 
 	var hdrType uint32
 	if err = binary.Read(reader, binary.BigEndian, &hdrType); err != nil {
-		return nil, errors.WrapPrefix(err, "Can not read header type", 1)
+		err = errors.WrapPrefix(err, "Can not read header type", 1)
+		return
 	}
+	parsed += 4
 
 	if err = binary.Read(reader, binary.BigEndian, &header.HdrLen); err != nil {
-		return nil, errors.WrapPrefix(err, "Can not read header length", 1)
+		err = errors.WrapPrefix(err, "Can not read header length", 1)
+		return
 	}
+	parsed += 4
 
 	header.HdrType = HeaderType(hdrType)
 	header.HdrBody = make([]byte, header.HdrLen)
 	n, rerr := reader.Read(header.HdrBody)
 	if rerr != nil && rerr != io.EOF {
-		return nil, errors.WrapPrefix(rerr, "Can not read header body", 1)
+		err = errors.WrapPrefix(rerr, "Can not read header body", 1)
+		return
 	}
 	if uint32(n) != header.HdrLen {
-		return nil, errors.Errorf("Read %v bytes for header body but expected %v", n, header.HdrLen)
+		err = errors.Errorf("Read %v bytes for header body but expected %v", n, header.HdrLen)
+		return
 	}
+	parsed += uint32(n)
 
 	if header.HdrType.IsGzipped() {
 		body, gerr := tools.Gunzip(header.HdrBody)
@@ -177,5 +188,5 @@ func DeserializeCipherHdrStreamV1(reader io.Reader) (header *CipherHdrV1, err er
 		header.HdrBody = body
 	}
 
-	return header, nil
+	return
 }

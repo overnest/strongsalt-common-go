@@ -116,16 +116,24 @@ func DeserializePlainHdrV1(b []byte) (complete bool, parsedBytes uint32, header 
 }
 
 // DeserializePlainHdrStreamV1 deserializes the plaintext header
-func DeserializePlainHdrStreamV1(reader io.Reader) (header *PlainHdrV1, err error) {
+func DeserializePlainHdrStreamV1(reader io.Reader) (header *PlainHdrV1, parsed uint32, err error) {
+	header = nil
+	parsed = 0
+	err = nil
+
 	var hdrType uint32
 	if err = binary.Read(reader, binary.BigEndian, &hdrType); err != nil {
-		return nil, errors.WrapPrefix(err, "Can not read header type", 0)
+		err = errors.WrapPrefix(err, "Can not read header type", 0)
+		return
 	}
+	parsed += 4
 
 	var hdrLen uint32
 	if err = binary.Read(reader, binary.BigEndian, &hdrLen); err != nil {
-		return nil, errors.WrapPrefix(err, "Can not read header length", 0)
+		err = errors.WrapPrefix(err, "Can not read header length", 0)
+		return
 	}
+	parsed += 4
 
 	header = &PlainHdrV1{
 		Version: PlainHeaderV1,
@@ -134,11 +142,14 @@ func DeserializePlainHdrStreamV1(reader io.Reader) (header *PlainHdrV1, err erro
 	header.HdrBody = make([]byte, header.HdrLen)
 	n, rerr := reader.Read(header.HdrBody)
 	if rerr != nil && rerr != io.EOF {
-		return nil, errors.WrapPrefix(rerr, "Can not read header body", 0)
+		err = errors.WrapPrefix(rerr, "Can not read header body", 0)
+		return
 	}
 	if uint32(n) != header.HdrLen {
-		return nil, errors.Errorf("Read %v bytes for header body but expected %v", n, header.HdrLen)
+		err = errors.Errorf("Read %v bytes for header body but expected %v", n, header.HdrLen)
+		return
 	}
+	parsed += uint32(n)
 
 	if header.HdrType.IsGzipped() {
 		body, gerr := tools.Gunzip(header.HdrBody)
@@ -150,5 +161,5 @@ func DeserializePlainHdrStreamV1(reader io.Reader) (header *PlainHdrV1, err erro
 		header.HdrBody = body
 	}
 
-	return header, nil
+	return
 }

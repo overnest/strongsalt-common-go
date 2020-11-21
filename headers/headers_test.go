@@ -74,12 +74,12 @@ func TestPlaintextCiphtextHeaderStreamV1(t *testing.T) {
 		header = plainHdr
 		assert.Equal(t, PlainHeaderV1, header.GetVersion())
 
-		s, err := header.Serialize()
+		plainSerial, err := header.Serialize()
 		assert.NilError(t, err)
 
-		n, err := file.Write(s)
+		n, err := file.Write(plainSerial)
 		assert.NilError(t, err)
-		assert.Equal(t, n, len(s))
+		assert.Equal(t, n, len(plainSerial))
 
 		cipherHdr := &CipherHdrV1{CipherHeaderV1, CipherHdrV1Prime,
 			hdrType, uint32(len(teststr)), []byte(teststr)}
@@ -87,21 +87,24 @@ func TestPlaintextCiphtextHeaderStreamV1(t *testing.T) {
 		header = cipherHdr
 		assert.Equal(t, CipherHeaderV1, header.GetVersion())
 
-		s, err = header.Serialize()
+		cipherSerial, err := header.Serialize()
 		assert.NilError(t, err)
 
-		n, err = file.Write(s)
+		n, err = file.Write(cipherSerial)
 		assert.NilError(t, err)
-		assert.Equal(t, n, len(s))
+		assert.Equal(t, n, len(cipherSerial))
 
 		file.Close()
 
 		file, err = os.Open(filename)
 		assert.NilError(t, err)
 
-		header, err = DeserializePlainHdrStream(file)
+		var parsed uint32
+
+		header, parsed, err = DeserializePlainHdrStream(file)
 		assert.NilError(t, err)
 		assert.Equal(t, header.GetVersion(), PlainHeaderV1)
+		assert.Equal(t, parsed, uint32(len(plainSerial)))
 
 		plainHdr, ok := header.(*PlainHdrV1)
 		assert.Assert(t, ok)
@@ -110,9 +113,10 @@ func TestPlaintextCiphtextHeaderStreamV1(t *testing.T) {
 		assert.Equal(t, plainHdr.HdrLen, uint32(len(teststr)))
 		assert.DeepEqual(t, plainHdr.HdrBody, []byte(teststr))
 
-		header, err = DeserializeCipherHdrStream(file)
+		header, parsed, err = DeserializeCipherHdrStream(file)
 		assert.NilError(t, err)
 		assert.Equal(t, header.GetVersion(), CipherHeaderV1)
+		assert.Equal(t, parsed, uint32(len(cipherSerial)))
 
 		cipherHdr, ok = header.(*CipherHdrV1)
 		assert.Assert(t, ok)
