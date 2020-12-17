@@ -34,8 +34,8 @@ type Block interface {
 
 // NewBlockListWriter creates a block list for writing only
 //
-func NewBlockListWriter(store interface{}, paddedBlockSize uint32) (BlockList, error) {
-	return NewBlockListWriterV1(store, paddedBlockSize)
+func NewBlockListWriter(store interface{}, paddedBlockSize uint32, initOffset uint64) (BlockList, error) {
+	return NewBlockListWriterV1(store, paddedBlockSize, initOffset)
 }
 
 // NewBlockListReader creates a block list for reading only

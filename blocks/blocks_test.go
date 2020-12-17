@@ -71,12 +71,14 @@ func TestBlockV1(t *testing.T) {
 
 func TestBlockListV1(t *testing.T) {
 	// Test variable sized block list
-	testBlockListV1(t, 0, 10, 50)
+	testBlockListV1(t, 0, 10, 50, 0)
+	testBlockListV1(t, 0, 10, 50, 100)
 	// Test padded fixed sized block list
-	testBlockListV1(t, 15, 10, 50)
+	testBlockListV1(t, 15, 10, 50, 0)
+	testBlockListV1(t, 15, 10, 50, 100)
 }
 
-func testBlockListV1(t *testing.T, paddedBlockSize, targetBlockSize, variancePercentage uint32) {
+func testBlockListV1(t *testing.T, paddedBlockSize, targetBlockSize, variancePercentage uint32, initOffset uint64) {
 	fileName := "/tmp/blocklistv1_test"
 
 	//
@@ -87,7 +89,17 @@ func testBlockListV1(t *testing.T, paddedBlockSize, targetBlockSize, variancePer
 	defer os.Remove(fileName)
 	defer file.Close()
 
-	blWriter, err := NewBlockListWriterV1(file, paddedBlockSize)
+	if initOffset > 0 {
+		garbage := make([]byte, initOffset)
+		n, err := rand.Read(garbage)
+		assert.NilError(t, err)
+		assert.Equal(t, n, len(garbage))
+		n, err = file.Write(garbage)
+		assert.NilError(t, err)
+		assert.Equal(t, n, len(garbage))
+	}
+
+	blWriter, err := NewBlockListWriterV1(file, paddedBlockSize, initOffset)
 	assert.NilError(t, err)
 	assert.Equal(t, blWriter.GetVersion(), BlockListV1)
 
@@ -164,10 +176,21 @@ func testBlockListV1(t *testing.T, paddedBlockSize, targetBlockSize, variancePer
 	defer file.Close()
 	stat, err := file.Stat()
 	assert.NilError(t, err)
-	blReader, err := NewBlockListReaderV1(file, 0, uint64(stat.Size()))
+
+	if initOffset > 0 {
+		garbage := make([]byte, initOffset)
+		n, err = file.Read(garbage)
+		assert.NilError(t, err)
+		assert.Equal(t, n, len(garbage))
+	}
+
+	blReader, err := NewBlockListReaderV1(file, initOffset, uint64(stat.Size()))
 	assert.NilError(t, err)
 	readBlocks := uint32(0)
 
+	//
+	// Read block list serially
+	//
 	var readBytes []byte = nil
 	err = nil
 	for err == nil {

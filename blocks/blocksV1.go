@@ -70,9 +70,9 @@ const (
 )
 
 // NewBlockListWriterV1 creates a block list version 1 writer
-func NewBlockListWriterV1(store interface{}, paddedBlockSize uint32) (BlockListWriterV1, error) {
+func NewBlockListWriterV1(store interface{}, paddedBlockSize uint32, initOffset uint64) (BlockListWriterV1, error) {
 	var ok bool
-	b := &blockListV1{BlockListV1, paddedBlockSize, nil, nil, nil, nil, nil, 0, 0, 0}
+	b := &blockListV1{BlockListV1, paddedBlockSize, nil, nil, nil, nil, nil, initOffset, 0, 0}
 
 	if b.writer, ok = store.(io.Writer); !ok {
 		return nil, errors.New("The storage must implement io.Writer")
