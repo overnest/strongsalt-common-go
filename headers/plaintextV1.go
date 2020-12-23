@@ -50,6 +50,11 @@ func (h *PlainHdrV1) Serialize() ([]byte, error) {
 	return b, nil
 }
 
+// GetBody gets the header body
+func (h *PlainHdrV1) GetBody() ([]byte, error) {
+	return h.HdrBody, nil
+}
+
 // Our headers have variable lengths. Therefore, when deserializing, we
 // will not know ahead of time how many bytes to pass to the deserialization
 // function. The only way to know whether we have enough bytes for deserialization

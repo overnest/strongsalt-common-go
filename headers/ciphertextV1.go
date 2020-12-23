@@ -121,6 +121,11 @@ func (h *CipherHdrV1) deserialize(b []byte) (complete bool, parsedBytes uint32, 
 	return
 }
 
+// GetBody gets the header body
+func (h *CipherHdrV1) GetBody() ([]byte, error) {
+	return h.HdrBody, nil
+}
+
 // DeserializeCipherHdrV1 deserializes the ciphertext header
 func DeserializeCipherHdrV1(b []byte) (complete bool, parsedBytes uint32, header *CipherHdrV1, err error) {
 	complete = false

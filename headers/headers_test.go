@@ -105,6 +105,9 @@ func TestPlaintextCiphtextHeaderStreamV1(t *testing.T) {
 		assert.NilError(t, err)
 		assert.Equal(t, header.GetVersion(), PlainHeaderV1)
 		assert.Equal(t, parsed, uint32(len(plainSerial)))
+		body, err := header.GetBody()
+		assert.NilError(t, err)
+		assert.DeepEqual(t, body, []byte(teststr))
 
 		plainHdr, ok := header.(*PlainHdrV1)
 		assert.Assert(t, ok)
@@ -117,6 +120,9 @@ func TestPlaintextCiphtextHeaderStreamV1(t *testing.T) {
 		assert.NilError(t, err)
 		assert.Equal(t, header.GetVersion(), CipherHeaderV1)
 		assert.Equal(t, parsed, uint32(len(cipherSerial)))
+		body, err = header.GetBody()
+		assert.NilError(t, err)
+		assert.DeepEqual(t, body, []byte(teststr))
 
 		cipherHdr, ok = header.(*CipherHdrV1)
 		assert.Assert(t, ok)

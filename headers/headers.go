@@ -17,6 +17,7 @@ import (
 type Header interface {
 	GetVersion() uint32
 	Serialize() ([]byte, error)
+	GetBody() ([]byte, error)
 }
 
 // HeaderVer is structure used to parse header version
