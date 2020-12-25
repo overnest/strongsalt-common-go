@@ -2,6 +2,7 @@ package headers
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"unsafe"
 
@@ -28,6 +29,21 @@ type HeaderVer struct {
 // GetVersion retrieves the version number
 func (h *HeaderVer) GetVersion() uint32 {
 	return h.Version
+}
+
+// Deserialize deserializes the data into version number object
+func (h *HeaderVer) Deserialize(data []byte) (*HeaderVer, error) {
+	err := json.Unmarshal(data, h)
+	if err != nil {
+		return nil, errors.New(err)
+	}
+	return h, nil
+}
+
+// DeserializeHeaderVersion deserializes the data into version number object\
+func DeserializeHeaderVersion(data []byte) (*HeaderVer, error) {
+	h := &HeaderVer{}
+	return h.Deserialize(data)
 }
 
 // HeaderType is the header body type
