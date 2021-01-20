@@ -2,6 +2,7 @@ package blocks
 
 import (
 	"bytes"
+	"io"
 	"math/rand"
 	"os"
 	"testing"
@@ -201,6 +202,8 @@ func testBlockListV1(t *testing.T, paddedBlockSize, targetBlockSize, variancePer
 			assert.DeepEqual(t, block.GetData(), blReader.GetCurBlock().GetData())
 			readBytes = append(readBytes, block.GetData()...)
 			readBlocks++
+		} else {
+			assert.Equal(t, err, io.EOF)
 		}
 	}
 

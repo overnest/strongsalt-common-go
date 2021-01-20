@@ -233,6 +233,9 @@ func (b *blockListV1) ReadNextBlock() (Block, error) {
 	if b.IsBlockPadded() {
 		blockBytes = make([]byte, b.GetPaddedBlockSize())
 		if n, err = b.reader.Read(blockBytes); err != nil {
+			if err == io.EOF {
+				return nil, err
+			}
 			return nil, errors.New(err)
 		}
 		if n != len(blockBytes) {
@@ -241,6 +244,9 @@ func (b *blockListV1) ReadNextBlock() (Block, error) {
 	} else {
 		hdr := make([]byte, blockHeaderLen)
 		if n, err = b.reader.Read(hdr); err != nil {
+			if err == io.EOF {
+				return nil, err
+			}
 			return nil, errors.New(err)
 		}
 		if n != len(hdr) {
@@ -252,6 +258,9 @@ func (b *blockListV1) ReadNextBlock() (Block, error) {
 		blockSize := binary.BigEndian.Uint32(hdr[blockNumLen:])
 		blockData := make([]byte, blockSize)
 		if n, err = b.reader.Read(blockData); err != nil {
+			if err == io.EOF {
+				return nil, err
+			}
 			return nil, errors.New(err)
 		}
 		if n != len(blockData) {
@@ -296,6 +305,9 @@ func (b *blockListV1) ReadBlockAt(index uint32) (Block, error) {
 
 	n, err := b.readerat.ReadAt(blockBytes, int64(offset))
 	if err != nil {
+		if err == io.EOF {
+			return nil, err
+		}
 		return nil, errors.New(err)
 	}
 	if n != len(blockBytes) {
