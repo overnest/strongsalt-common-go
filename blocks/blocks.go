@@ -23,6 +23,14 @@ type Block interface {
 	GetData() []byte
 }
 
+// Comparator is a comparator function definition.
+// Returns:
+//   < 0      , if value < block
+//   1        , if value is in block
+//   0        , if value not in block
+//   > 1      , if value > block
+type Comparator func(value interface{}, block Block) (int, error)
+
 //
 // A padded block list will make sure that every block is the same size by
 //    1. Padding smaller blocks into a bigger, fixed size

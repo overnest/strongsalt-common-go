@@ -38,6 +38,8 @@ type BlockListReaderV1 interface {
 	GetCurBlock() Block
 	ReadNextBlock() (Block, error)
 	ReadBlockAt(index uint32) (Block, error)
+	SearchLinear(value interface{}, comparator Comparator) (Block, error)
+	SearchBinary(value interface{}, comparator Comparator) (Block, error)
 }
 
 type blockListV1 struct {
@@ -279,12 +281,11 @@ func (b *blockListV1) ReadNextBlock() (Block, error) {
 	if b.GetCurBlock() != nil {
 		if blockv1.GetID() != b.GetCurBlock().GetID()+1 {
 			return nil, errors.Errorf("The next block ID(%v) does not immediately follow "+
-				"the previous block ID(%v)", blockv1.GetID(), b.GetCurBlock().GetData())
+				"the previous block ID(%v)", blockv1.GetID(), b.GetCurBlock().GetID())
 		}
 	}
 
 	b.curOffset += uint64(len(blockBytes))
-	b.endOffset = b.curOffset
 	b.curBlock = blockv1
 	return blockv1, nil
 }
@@ -371,6 +372,102 @@ func (b *blockListV1) WriteBlock(block Block) error {
 	b.curBlock = blockv1
 
 	return nil
+}
+
+func (b *blockListV1) SearchLinear(value interface{}, comparator Comparator) (Block, error) {
+	if b.reader == nil {
+		return nil, errors.New("The underlying storage is not capable " +
+			"of performing reads")
+	}
+
+	if b.seeker != nil {
+		_, err := b.seeker.Seek(int64(b.initOffset), io.SeekStart)
+		if err != nil {
+			return nil, errors.New(err)
+		}
+		b.curBlock = nil
+		b.curOffset = b.initOffset
+	}
+
+	for true {
+		block, err := b.ReadNextBlock()
+		if err != nil && err != io.EOF {
+			return nil, errors.New(err)
+		}
+
+		if block != nil {
+			comp, err := comparator(value, block)
+			if err != nil {
+				return nil, errors.New(err)
+			}
+			// Found
+			if comp == 1 {
+				return block, nil
+			}
+		}
+
+		if err != nil {
+			break
+		}
+	}
+
+	return nil, nil
+}
+
+func (b *blockListV1) SearchBinary(value interface{}, comparator Comparator) (Block, error) {
+	if b.readerat == nil {
+		return nil, errors.New("The underlying storage is not capable " +
+			"of performing random reads")
+	}
+
+	left := uint32(0)
+	right, err := b.GetTotalBlocks()
+	if err != nil {
+		return nil, errors.New(err)
+	}
+	right--
+
+	for true {
+		mid := (left + right) / 2
+		block, err := b.ReadBlockAt(mid)
+		if err != nil {
+			return nil, errors.New(err)
+		}
+
+		comp, err := comparator(value, block)
+		if err != nil {
+			return nil, errors.New(err)
+		}
+		// Found
+		if comp == 1 {
+			return block, nil
+		}
+		// Doesn't exist
+		if comp == 0 {
+			return nil, nil
+		}
+
+		// Can't find the value
+		if left == right {
+			return nil, nil
+		}
+
+		if comp < 0 {
+			if mid > left {
+				right = mid - 1
+			} else {
+				right = left
+			}
+		} else {
+			if mid < right {
+				left = mid + 1
+			} else {
+				left = right
+			}
+		}
+	}
+
+	return nil, nil
 }
 
 func newBlock(id, size uint32, data []byte) *blockV1 {
