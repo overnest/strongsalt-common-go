@@ -38,6 +38,7 @@ type BlockListReaderV1 interface {
 	GetCurBlock() Block
 	ReadNextBlock() (Block, error)
 	ReadBlockAt(index uint32) (Block, error)
+	Reset() error
 	SearchLinear(value interface{}, comparator Comparator) (Block, error)
 	SearchBinary(value interface{}, comparator Comparator) (Block, error)
 }
@@ -374,19 +375,29 @@ func (b *blockListV1) WriteBlock(block Block) error {
 	return nil
 }
 
+func (b *blockListV1) Reset() error {
+	if b.seeker != nil {
+		_, err := b.seeker.Seek(int64(b.initOffset), io.SeekStart)
+		if err != nil {
+			return errors.New(err)
+		}
+		b.curBlock = nil
+		b.curOffset = b.initOffset
+		return nil
+	}
+
+	return errors.Errorf("Seeker interface not implemented. Can not reset")
+}
+
 func (b *blockListV1) SearchLinear(value interface{}, comparator Comparator) (Block, error) {
 	if b.reader == nil {
 		return nil, errors.New("The underlying storage is not capable " +
 			"of performing reads")
 	}
 
-	if b.seeker != nil {
-		_, err := b.seeker.Seek(int64(b.initOffset), io.SeekStart)
-		if err != nil {
-			return nil, errors.New(err)
-		}
-		b.curBlock = nil
-		b.curOffset = b.initOffset
+	err := b.Reset()
+	if err != nil {
+		return nil, err
 	}
 
 	for true {

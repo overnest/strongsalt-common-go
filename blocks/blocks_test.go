@@ -247,6 +247,7 @@ func getVariableSizedBlocks(varianceByteRange int, targetBlockSize uint32) []byt
 
 func TestBlockListSerachV1(t *testing.T) {
 	testBlockListSearchV1(t, false, 0)
+	testBlockListSearchV1(t, false, 100)
 }
 
 func testBlockListSearchV1(t *testing.T, padded bool, initOffset uint64) {
