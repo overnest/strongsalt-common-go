@@ -125,6 +125,10 @@ func NewBlockListReaderV1(store interface{}, initOffset, endOffset uint64) (Bloc
 		return nil, errors.New("The storage must implement io.Reader")
 	}
 
+	if b.seeker, ok = store.(io.Seeker); !ok {
+		return nil, errors.New("The storage must implement io.Seeker")
+	}
+
 	version := make([]byte, versionLen)
 	n, err := b.reader.Read(version)
 	if err != nil {
@@ -154,11 +158,6 @@ func NewBlockListReaderV1(store interface{}, initOffset, endOffset uint64) (Bloc
 		if endOffset < 1 {
 			return nil, errors.New(`A padded block list allows random access, 
 				which requires the code to have and endOffset > 0`)
-		}
-
-		// We don't necessarily need seek function. But it's nice to have
-		if b.seeker, ok = store.(io.Seeker); !ok {
-			b.seeker = nil
 		}
 	}
 
