@@ -1,10 +1,12 @@
 package blocks
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"io"
 	"math"
-	"math/rand"
+
+	"github.com/overnest/strongsalt-common-go/tools"
 
 	"github.com/go-errors/errors"
 )
@@ -25,8 +27,10 @@ type BlockListWriterV1 interface {
 	GetPaddedBlockSize() uint32
 	GetMaxDataSize() uint32
 	GetTotalBlocks() (uint32, error)
-	WriteBlock(block Block) error
-	WriteBlockData(data []byte) (Block, error)
+	writeBlock(block Block) error
+	WriteBlockData(blockData interface{}) error
+	writeBlockDataBytes(data []byte) (Block, error)
+	SerializeBlockData(blockData interface{}) ([]byte, error)
 }
 
 // BlockListReaderV1 is the block list reader interface for version 1
@@ -36,24 +40,28 @@ type BlockListReaderV1 interface {
 	GetPaddedBlockSize() uint32
 	GetTotalBlocks() (uint32, error)
 	GetCurBlock() Block
-	ReadNextBlock() (Block, error)
-	ReadBlockAt(index uint32) (Block, error)
+	readNextBlock() (Block, error)
+	ReadNextBlockData() (blockData interface{}, jsonSize int, err error)
+	readBlockAt(index uint32) (Block, error)
+	ReadBlockDataAt(index uint32) (interface{}, int, error)
 	Reset() error
-	SearchLinear(value interface{}, comparator Comparator) (Block, error)
-	SearchBinary(value interface{}, comparator Comparator) (Block, error)
+	SearchLinear(value interface{}, comparator BlockDataComparator) (interface{}, int, error)
+	SearchBinary(value interface{}, comparator BlockDataComparator) (interface{}, int, error)
+	deserializeBlockData(data []byte) (interface{}, int, error)
 }
 
 type blockListV1 struct {
-	version         uint32
-	paddedBlockSize uint32
-	curBlock        Block
-	writer          io.Writer
-	reader          io.Reader
-	readerat        io.ReaderAt
-	seeker          io.Seeker
-	initOffset      uint64
-	curOffset       uint64
-	endOffset       uint64
+	version                   uint32
+	paddedBlockSize           uint32
+	curBlock                  Block
+	writer                    io.Writer
+	reader                    io.Reader
+	readerat                  io.ReaderAt
+	seeker                    io.Seeker
+	initOffset                uint64
+	curOffset                 uint64
+	endOffset                 uint64
+	initDeserializedBlockData InitEmptyBlockData
 }
 
 type blockV1 struct {
@@ -75,7 +83,8 @@ const (
 // NewBlockListWriterV1 creates a block list version 1 writer
 func NewBlockListWriterV1(store interface{}, paddedBlockSize uint32, initOffset uint64) (BlockListWriterV1, error) {
 	var ok bool
-	b := &blockListV1{BlockListV1, paddedBlockSize, nil, nil, nil, nil, nil, initOffset, 0, 0}
+	b := &blockListV1{BlockListV1, paddedBlockSize,
+		nil, nil, nil, nil, nil, initOffset, 0, 0, nil}
 
 	if b.writer, ok = store.(io.Writer); !ok {
 		return nil, errors.New("The storage must implement io.Writer")
@@ -117,9 +126,13 @@ func NewBlockListWriterV1(store interface{}, paddedBlockSize uint32, initOffset 
 }
 
 // NewBlockListReaderV1 creates a block list version 1 reader
-func NewBlockListReaderV1(store interface{}, initOffset, endOffset uint64) (BlockListReaderV1, error) {
+func NewBlockListReaderV1(store interface{}, initOffset, endOffset uint64, initEmptyBlkData InitEmptyBlockData) (BlockListReaderV1, error) {
 	var ok bool
-	b := &blockListV1{BlockListV1, 0, nil, nil, nil, nil, nil, initOffset, initOffset, endOffset}
+	b := &blockListV1{BlockListV1, 0, nil,
+		nil, nil, nil, nil,
+		initOffset, initOffset, endOffset,
+		initEmptyBlkData,
+	}
 
 	if b.reader, ok = store.(io.Reader); !ok {
 		return nil, errors.New("The storage must implement io.Reader")
@@ -223,7 +236,7 @@ func (b *blockListV1) GetCurBlock() Block {
 	return b.curBlock
 }
 
-func (b *blockListV1) ReadNextBlock() (Block, error) {
+func (b *blockListV1) readNextBlock() (Block, error) {
 	if b.reader == nil {
 		return nil, errors.New("The underlying storage is not capable " +
 			"of performing reads")
@@ -290,7 +303,24 @@ func (b *blockListV1) ReadNextBlock() (Block, error) {
 	return blockv1, nil
 }
 
-func (b *blockListV1) ReadBlockAt(index uint32) (Block, error) {
+// read next block, deserialize block data
+func (b *blockListV1) ReadNextBlockData() (interface{}, int, error) {
+	blk, err := b.readNextBlock()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if blk == nil || len(blk.GetData()) == 0 {
+		return nil, 0, errors.New("invalid blockData")
+	}
+	deserialized, jsonSize, err := b.deserializeBlockData(blk.GetData())
+	if err != nil {
+		return nil, 0, err
+	}
+	return deserialized, jsonSize, nil
+}
+
+func (b *blockListV1) readBlockAt(index uint32) (Block, error) {
 	if !b.IsBlockPadded() {
 		return nil, errors.New("The block list does not have padded fixed sized blocks. " +
 			"Can not perform random access reads")
@@ -327,18 +357,45 @@ func (b *blockListV1) ReadBlockAt(index uint32) (Block, error) {
 	return block, nil
 }
 
-func (b *blockListV1) WriteBlockData(data []byte) (Block, error) {
+func (b *blockListV1) ReadBlockDataAt(index uint32) (interface{}, int, error) {
+	blk, err := b.readBlockAt(index)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if blk == nil || len(blk.GetData()) == 0 {
+		return nil, 0, errors.New("invalid blockData")
+	}
+	deserialized, jsonSize, err := b.deserializeBlockData(blk.GetData())
+	if err != nil {
+		return nil, 0, err
+	}
+	return deserialized, jsonSize, nil
+}
+
+// serialize blockData and write
+func (b *blockListV1) WriteBlockData(blockData interface{}) error {
+	dataBytes, err := b.SerializeBlockData(blockData)
+	if err != nil {
+		return err
+	}
+	_, err = b.writeBlockDataBytes(dataBytes)
+	return err
+}
+
+// write serialized blockData bytes
+func (b *blockListV1) writeBlockDataBytes(data []byte) (Block, error) {
 	block := &blockV1{0, uint32(len(data)), data}
 
 	if b.GetCurBlock() != nil {
 		block.id = b.GetCurBlock().GetID() + 1
 	}
 
-	err := b.WriteBlock(block)
+	err := b.writeBlock(block)
 	return block, err
 }
 
-func (b *blockListV1) WriteBlock(block Block) error {
+func (b *blockListV1) writeBlock(block Block) error {
 	var blockv1 *blockV1
 	var ok bool
 
@@ -388,78 +445,78 @@ func (b *blockListV1) Reset() error {
 	return errors.Errorf("Seeker interface not implemented. Can not reset")
 }
 
-func (b *blockListV1) SearchLinear(value interface{}, comparator Comparator) (Block, error) {
+func (b *blockListV1) SearchLinear(value interface{}, comparator BlockDataComparator) (interface{}, int, error) {
 	if b.reader == nil {
-		return nil, errors.New("The underlying storage is not capable " +
+		return nil, 0, errors.New("The underlying storage is not capable " +
 			"of performing reads")
 	}
 
 	err := b.Reset()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	for true {
-		block, err := b.ReadNextBlock()
-		if err != nil && err != io.EOF {
-			return nil, errors.New(err)
-		}
-
-		if block != nil {
-			comp, err := comparator(value, block)
-			if err != nil {
-				return nil, errors.New(err)
-			}
-			// Found
-			if comp == 1 {
-				return block, nil
-			}
+		blockData, jsonSize, err := b.ReadNextBlockData()
+		if err == io.EOF {
+			break
 		}
 
 		if err != nil {
-			break
+			return nil, 0, errors.New(err)
 		}
+
+		comp, err := comparator(value, blockData)
+		if err != nil {
+			return nil, 0, errors.New(err)
+		}
+		// Found
+		if comp == 1 {
+			return blockData, jsonSize, nil
+		}
+
 	}
 
-	return nil, nil
+	return nil, 0, nil
 }
 
-func (b *blockListV1) SearchBinary(value interface{}, comparator Comparator) (Block, error) {
+func (b *blockListV1) SearchBinary(value interface{}, comparator BlockDataComparator) (interface{}, int, error) {
 	if b.readerat == nil {
-		return nil, errors.New("The underlying storage is not capable " +
+		return nil, 0, errors.New("The underlying storage is not capable " +
 			"of performing random reads")
 	}
 
 	left := uint32(0)
 	right, err := b.GetTotalBlocks()
 	if err != nil {
-		return nil, errors.New(err)
+		return nil, 0, errors.New(err)
 	}
 	right--
 
 	for true {
 		mid := (left + right) / 2
-		block, err := b.ReadBlockAt(mid)
+
+		blockData, jsonSize, err := b.ReadBlockDataAt(mid)
 		if err != nil {
-			return nil, errors.New(err)
+			return nil, 0, errors.New(err)
 		}
 
-		comp, err := comparator(value, block)
+		comp, err := comparator(value, blockData)
 		if err != nil {
-			return nil, errors.New(err)
+			return nil, 0, errors.New(err)
 		}
 		// Found
 		if comp == 1 {
-			return block, nil
+			return blockData, jsonSize, nil
 		}
 		// Doesn't exist
 		if comp == 0 {
-			return nil, nil
+			return nil, 0, nil
 		}
 
 		// Can't find the value
 		if left == right {
-			return nil, nil
+			return nil, 0, nil
 		}
 
 		if comp < 0 {
@@ -477,7 +534,36 @@ func (b *blockListV1) SearchBinary(value interface{}, comparator Comparator) (Bl
 		}
 	}
 
-	return nil, nil
+	return nil, 0, nil
+}
+
+func (b *blockListV1) SerializeBlockData(blockData interface{}) ([]byte, error) {
+	marshalledBytes, err := tools.Marshal(blockData)
+	if err != nil {
+		return nil, err
+	}
+	if !b.IsBlockPadded() {
+		return tools.Gzip(marshalledBytes)
+	}
+	return marshalledBytes, nil
+}
+
+func (b *blockListV1) deserializeBlockData(data []byte) (interface{}, int, error) {
+	deserialized := b.initDeserializedBlockData()
+	uncompressedBytes := data
+	if !b.IsBlockPadded() {
+		var err error
+		uncompressedBytes, err = tools.Gunzip(data)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+
+	err := tools.Unmarshal(uncompressedBytes, deserialized)
+	if err != nil {
+		return nil, 0, err
+	}
+	return deserialized, len(uncompressedBytes), nil
 }
 
 func newBlock(id, size uint32, data []byte) *blockV1 {
@@ -496,6 +582,7 @@ func (b *blockV1) GetData() []byte {
 	return b.data
 }
 
+//	blockID(4bytes) + blockSize(4bytes) + blockData(blockSize bytes) + padding(optional)
 func (b *blockV1) Serialize(paddedBlockSize uint32) ([]byte, error) {
 	blockSize := uint32(len(b.GetData()))
 	totalSize := blockHeaderLen + blockSize

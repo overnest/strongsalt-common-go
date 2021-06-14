@@ -1,5 +1,7 @@
 package blocks
 
+import "github.com/overnest/strongsalt-common-go/tools"
+
 const (
 	_ = iota // Skip 0
 	// BlockListV1 is block list version 1
@@ -23,13 +25,16 @@ type Block interface {
 	GetData() []byte
 }
 
-// Comparator is a comparator function definition.
+// BlockDataComparator is a comparator function definition.
 // Returns:
 //   < 0      , if value < block
 //   1        , if value is in block
 //   0        , if value not in block
 //   > 1      , if value > block
-type Comparator func(value interface{}, block Block) (int, error)
+type BlockDataComparator func(value interface{}, blockData interface{}) (int, error)
+
+// initialize empty block data struct
+type InitEmptyBlockData func() interface{}
 
 //
 // A padded block list will make sure that every block is the same size by
@@ -48,6 +53,14 @@ func NewBlockListWriter(store interface{}, paddedBlockSize uint32, initOffset ui
 
 // NewBlockListReader creates a block list for reading only
 //
-func NewBlockListReader(store interface{}, initOffset, endOffset uint64) (BlockList, error) {
-	return NewBlockListReaderV1(store, initOffset, endOffset)
+func NewBlockListReader(store interface{}, initOffset, endOffset uint64, initBlockData InitEmptyBlockData) (BlockList, error) {
+	return NewBlockListReaderV1(store, initOffset, endOffset, initBlockData)
+}
+
+func GetPredictedJSONSize(data interface{}) (int, error) {
+	dataBytes, err := tools.Marshal(data)
+	if err != nil {
+		return 0, err
+	}
+	return len(dataBytes), nil
 }

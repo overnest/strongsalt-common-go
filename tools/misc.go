@@ -1,5 +1,7 @@
 package tools
 
+import "encoding/json"
+
 // MaxUint32 returns the bigger value between two uint32 numbers
 func MaxUint32(x, y uint32) uint32 {
 	if x > y {
@@ -53,4 +55,13 @@ func BinarySearchU64(list []uint64, val uint64) int {
 	}
 
 	return -1
+}
+
+
+func Marshal(data interface{}) ([]byte, error){
+	return json.Marshal(data)
+}
+
+func Unmarshal( data []byte, v interface{}) error{
+	return json.Unmarshal(data, v)
 }

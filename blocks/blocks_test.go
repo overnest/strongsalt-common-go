@@ -2,15 +2,15 @@ package blocks
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
 	"os"
 	"testing"
 
-	"github.com/go-errors/errors"
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/go-errors/errors"
 	"github.com/overnest/strongsalt-common-go/tools"
 	"gotest.tools/assert"
 )
@@ -139,7 +139,7 @@ func testBlockListV1(t *testing.T, paddedBlockSize, targetBlockSize, variancePer
 			blockData = blockData[:n]
 			blockDataLen := uint32(len(blockData))
 
-			block, err = blWriter.WriteBlockData(blockData)
+			block, err = blWriter.writeBlockDataBytes(blockData)
 			if blWriter.IsBlockPadded() {
 				if blockDataLen > blWriter.GetPaddedBlockSize()-8 {
 					// Too big to be padded
@@ -148,7 +148,7 @@ func testBlockListV1(t *testing.T, paddedBlockSize, targetBlockSize, variancePer
 
 					for blockDataLen > 0 {
 						maxDataSize := tools.MinUint32(blWriter.GetMaxDataSize(), uint32(len(blockData)))
-						block, err = blWriter.WriteBlockData(blockData[:maxDataSize])
+						block, err = blWriter.writeBlockDataBytes(blockData[:maxDataSize])
 						assert.NilError(t, err)
 						assert.Equal(t, block.GetSize(), uint32(len(blockData[:maxDataSize])))
 						assert.DeepEqual(t, block.GetData(), blockData[:maxDataSize])
@@ -188,7 +188,7 @@ func testBlockListV1(t *testing.T, paddedBlockSize, targetBlockSize, variancePer
 		assert.Equal(t, n, len(garbage))
 	}
 
-	blReader, err := NewBlockListReaderV1(file, initOffset, uint64(stat.Size()))
+	blReader, err := NewBlockListReaderV1(file, initOffset, uint64(stat.Size()), nil)
 	assert.NilError(t, err)
 	readBlocks := uint32(0)
 
@@ -199,7 +199,7 @@ func testBlockListV1(t *testing.T, paddedBlockSize, targetBlockSize, variancePer
 	err = nil
 	for err == nil {
 		var block Block
-		block, err = blReader.ReadNextBlock()
+		block, err = blReader.readNextBlock()
 		if err == nil {
 			assert.Equal(t, block.GetSize(), uint32(len(block.GetData())))
 			assert.DeepEqual(t, block.GetData(), blReader.GetCurBlock().GetData())
@@ -222,7 +222,7 @@ func testBlockListV1(t *testing.T, paddedBlockSize, targetBlockSize, variancePer
 		totalBlocks, err := blReader.GetTotalBlocks()
 		assert.NilError(t, err)
 		for i := int(totalBlocks) - 1; i >= 0; i-- {
-			block, err := blReader.ReadBlockAt(uint32(i))
+			block, err := blReader.readBlockAt(uint32(i))
 			assert.NilError(t, err)
 			readBytes = append(block.GetData(), readBytes...)
 			readBlocks++
@@ -282,14 +282,15 @@ func testBlockListSearchV1(t *testing.T, padded bool, initOffset uint64) {
 	for i := start; i < end; i++ {
 		value := i * 10
 		block.List = append(block.List, value)
-		serial, err := block.Serialize()
+
+		serial, err := blWriter.SerializeBlockData(block)
 		assert.NilError(t, err)
 
 		if uint32(len(serial)) > blWriter.GetMaxDataSize() {
 			block.List = block.List[:len(block.List)-1]
-			serial, err = block.Serialize()
+			serial, err = blWriter.SerializeBlockData(block)
 			assert.NilError(t, err)
-			_, err = blWriter.WriteBlockData(serial)
+			_, err = blWriter.writeBlockDataBytes(serial)
 			assert.NilError(t, err)
 
 			block = &testBlockV1{List: make([]uint64, 0, 100)}
@@ -298,9 +299,9 @@ func testBlockListSearchV1(t *testing.T, padded bool, initOffset uint64) {
 	}
 
 	if len(block.List) > 0 {
-		serial, err := block.Serialize()
+		serial, err := blWriter.SerializeBlockData(block)
 		assert.NilError(t, err)
-		_, err = blWriter.WriteBlockData(serial)
+		_, err = blWriter.writeBlockDataBytes(serial)
 		assert.NilError(t, err)
 	}
 
@@ -322,7 +323,7 @@ func testBlockListSearchV1(t *testing.T, padded bool, initOffset uint64) {
 		assert.Equal(t, n, len(garbage))
 	}
 
-	blReader, err := NewBlockListReaderV1(file, initOffset, uint64(stat.Size()))
+	blReader, err := NewBlockListReaderV1(file, initOffset, uint64(stat.Size()), initEmptyBlockData)
 	assert.NilError(t, err)
 
 	//
@@ -381,33 +382,18 @@ type testBlockV1 struct {
 	List []uint64
 }
 
-func (block *testBlockV1) Serialize() ([]byte, error) {
-	b, err := json.Marshal(block)
-	if err != nil {
-		return nil, errors.New(err)
-	}
-	return b, nil
+var initEmptyBlockData = func() interface{} {
+	return &testBlockV1{}
 }
 
-func (block *testBlockV1) Deserialize(data []byte) (*testBlockV1, error) {
-	err := json.Unmarshal(data, block)
-	if err != nil {
-		return nil, errors.New(err)
-	}
-
-	return block, nil
-}
-
-func BlockTestComparator(value interface{}, block Block) (int, error) {
+func BlockTestComparator(value interface{}, blockData interface{}) (int, error) {
 	val, ok := value.(uint64)
 	if !ok {
 		return 0, errors.Errorf("The value is not uint64")
 	}
-
-	blk := &testBlockV1{}
-	blk, err := blk.Deserialize(block.GetData())
-	if err != nil {
-		return 0, errors.New(err)
+	blk, ok := blockData.(*testBlockV1)
+	if !ok {
+		return 0, errors.Errorf("The value is not testBlock")
 	}
 
 	if val < blk.List[0] {
